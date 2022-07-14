@@ -18,7 +18,8 @@ PORT = 5050 #??
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
 # SERVER = "169.254.155.73"
-SERVER = "192.168.56.102"
+# SERVER = "192.168.56.102"
+SERVER = "10.0.0.116"
 ADDR = (SERVER, PORT)
 #----------END GLOBAL VARIABLES---------- 
 
@@ -64,7 +65,7 @@ client.connect(ADDR)
 # Generate a secret key and send to server
 session_key = get_random_bytes(AES.block_size)
 
-server_pubkey_file = open('public.pem')
+server_pubkey_file = open('public_7_4.pem')
 server_pubkey = RSA.import_key(server_pubkey_file.read())
 server_pubkey_file.close()
 
@@ -76,7 +77,7 @@ send_key(enc_session_key)
 
 
 #----------OPEN CAM----------
-cap = cv2.VideoCapture(0)  # 0 is self facing
+cap = cv2.VideoCapture(1)  # 0 is self facing
 if not cap.isOpened():
     raise IOError("Cannot open webcam")
 #----------END OPEN CAM----------
@@ -86,8 +87,8 @@ while True:
 
     # debug code
     # img = cv2.imread("stock.jpeg")
-    _, img = cap.read()
-
+    x, img = cap.read()
+    print(x)
     cv2.imshow("hi", img)
 
     key = cv2.waitKey(1)

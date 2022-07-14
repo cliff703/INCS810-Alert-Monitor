@@ -7,17 +7,20 @@ import numpy as np
 import cv2
 import tensorflow as tf
 import time
+from playsound import playsound
 
 
 HEADER = 64
 PORT = 5050
-# SERVER = socket.gethostbyname(socket.gethostname()) # find self ip automatically
-SERVER = '192.168.56.102'
+SERVER = socket.gethostbyname(socket.gethostname()) # find self ip automatically
+# SERVER = '169.254.171.19' # using small router
+# SERVER = '10.0.0.145' # using home router
 ADDR = (SERVER, PORT) # (str, int)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
 SESSION_KEY = b''
 WARNING_THRESHOLD = 10
+DECISION_THRESHOLD = 0.2
 
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -128,8 +131,10 @@ def detect_faces(whole_img, classifier):
 def handle_client(conn, addr):
     print(f"[NEW CONNECTION] {conn.getpeername()} connected.") # could be get peername, or just addr
 
-    new_model_1 = tf.keras.models.load_model("trained_model_for_810.h5") 
+    # new_model_1 = tf.keras.models.load_model("models/trained_model_for_810.h5") 
+    new_model_1 = tf.keras.models.load_model("models/frozen_trained_model_for_810.h5") 
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    print(face_cascade)
     eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
     
     connected = True
@@ -140,78 +145,89 @@ def handle_client(conn, addr):
         msg_length = conn.recv(HEADER).decode(FORMAT)
         if msg_length:
             msg_length = int(msg_length)
-
-#            print("\n-----------------------------------------------------------------")
-#            print(f"Server has received the header, msg length will be: {msg_length}")
-
             if msg_length == 256: #message is a enc_session_key
                 enc_session_key = conn.recv(msg_length)
-#                print(f"enc_key_received is: {enc_session_key}")
-#                print(f"len of enc_key_received is: {len(enc_session_key)}")
 
-                private_key_file = open('private.pem')
+                private_key_file = open('keys/private.pem')
                 private_key = RSA.import_key(private_key_file.read())
 
                 cipher_rsa = PKCS1_OAEP.new(private_key)
                 SESSION_KEY = cipher_rsa.decrypt(enc_session_key)
-
-                #print(f"decrypted session key is: {SESSION_KEY.hex()}")
-
-
-
-
             else:
+
                 nonce = conn.recv(8)
-                #print(f"nonce is  {nonce.hex()}")
+                print(f"nonce is {nonce}")
+
                 msg_length -= 8 
                 msg = b''
-                #print(f"""Initiating retrieval 
-                #        bytes to get    = {msg_length}
-                #        chunks to get   = {msg_length // 512}
-                #        last chunk size = {msg_length % 512}""")
                 while msg_length >= 4096:
                     msg = msg + conn.recv(4096, socket.MSG_WAITALL)
                     msg_length -= 4096
-                #print(f"getting last chunk, len = {msg_length}")
                 msg = msg + conn.recv(msg_length, socket.MSG_WAITALL)
-
-                    
-                #print(f"Final message len received = {len(msg)}")
-                #print("-----------------------------------------------------------------\n")
                 cipher_aes = AES.new(SESSION_KEY, AES.MODE_CTR, nonce=nonce)
                 plaintext = cipher_aes.decrypt(msg)
 
                 msg_timestamp = int.from_bytes(plaintext[:4], 'big')
-                print(f"message is timestamped at {msg_timestamp}")
                 current_timestamp = int(time.time())
+                print(f"message is timestamped at {msg_timestamp}")
+                print(f"current time is {current_timestamp}")
+                print(f"time difference is {current_timestamp - msg_timestamp} seconds")
                 #original = unpad(plaintext, AES.block_size)
-                if current_timestamp - msg_timestamp < 60:
+                if current_timestamp - msg_timestamp < 3:
                     img_d_flattened = np.frombuffer(plaintext[4:], dtype=np.uint8)
                     img_d_recovered = cv2.imdecode(img_d_flattened, cv2.IMREAD_COLOR)
+                    cv2.imshow("The decrypted image", img_d_recovered)
+                    key = cv2.waitKey(1)
+                    if key == ord('q'):
+                        cv2.destroyAllWindows()
+                        break
 
                     face = detect_faces(img_d_recovered, face_cascade)
+                    if face is None:
+                        #playsound("sounds/noface.mp3")
 
                     if face is not None:
+                        cv2.imshow("the face", face)
+                        key = cv2.waitKey(1)
+                        if key == ord('q'):
+                            cv2.destroyAllWindows()
+                            break
                         left_eye, right_eye = detect_eyes(face, eye_cascade)
+                        cv2.imshow("the face", face)
+                        key = cv2.waitKey(1)
+                        if key == ord('q'):
+                            cv2.destroyAllWindows()
+                            break
+
                         if left_eye is None and right_eye is None: # no eyes are detected from the face
+                            #playsound('sounds/noeyes.mp3')
                             strike += 1
+
                         else:
                             if left_eye is not None:
+                                #playsound('sounds/lefteye.mp3')
+
                                 final_image = cv2.resize(left_eye, (224, 224))
                                 final_image = np.expand_dims(final_image, axis=0)
                                 final_image = final_image / 255
-                                eye_states.append(new_model_1.predict(final_image)[0][0] >= .5)
+                                print(f"**********left eye decision value is {new_model_1.predict(final_image)[0][0]}")
+                                eye_states.append(new_model_1.predict(final_image)[0][0] <= DECISION_THRESHOLD)
                             if right_eye is not None:
+                                #playsound('sounds/righteye.mp3')
                                 final_image = cv2.resize(right_eye, (224, 224))
                                 final_image = np.expand_dims(final_image, axis=0)
                                 final_image = final_image / 255
-                                eye_states.append(new_model_1.predict(final_image)[0][0] >= .5)
+                                print(f"**********right eye decision value is {new_model_1.predict(final_image)[0][0]}")
+                                eye_states.append(new_model_1.predict(final_image)[0][0] <= DECISION_THRESHOLD)
                                 print(f"eye state is {eye_states}")
                             if not any(eye_states): # all detected eyes closed
+                                playsound('sounds/strike.mp3')
                                 strike += 1
                                 eye_states = []
                                 print("strike given")
+                            print(f"Total Strike is {strike}")
                             if any(eye_states): # not all eyes closed
+                                playsound('sounds/reset.mp3')
                                 print("at least one eye is open, resetting strike")
                                 strike = 0
                                 eye_states = []
@@ -223,12 +239,15 @@ def handle_client(conn, addr):
                         # play a local warning
                         # send alert message to client
                         send(conn, b'sleep', SESSION_KEY)
+                        playsound('sounds/rest_area_warning.mp3')
                     else:
                         # send reply to client
                         send(conn, b'awake', SESSION_KEY)
-                    cv2.imshow("The decrypted image", img_d_recovered)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
+                    # cv2.imshow("The decrypted image", face)
+                    # cv2.destroyAllWindows()
+                else:
+                    print("message timestamp failed.")
+                    send(conn, b'stamp', SESSION_KEY)
             #elif msg.decode() == DISCONNECT_MESSAGE:
                 #connected = False
     conn.close()
